@@ -6,6 +6,13 @@
 #   IMAGE=... IMAGE_READY=1 bash verify.sh  # проверить уже собранный локальный образ
 set -uo pipefail
 
+# MSYS2 (UCRT64/MINGW64) и Git Bash «переводят» аргументы, начинающиеся с '/',
+# в виндовые пути: --entrypoint /entrypoint.sh превращается в E:/Git/entrypoint.sh,
+# и docker падает с "exec: E:/...: no such file or directory". Отключаем это.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+export MSYS2_ENV_CONV_EXCL='*'
+
 cd "$(dirname "$0")"
 IMAGE="${IMAGE:-go1-participant:verify}"
 PY="${PYTHON:-python3}"
@@ -61,7 +68,13 @@ else
   bad "/entrypoint.sh отсутствует или не исполняем"
 fi
 uid="$(docker run --rm --network none --entrypoint /bin/sh "$IMAGE" -c 'id -u' 2>/dev/null)"
-if [ "$uid" != "0" ]; then ok "запуск от uid=$uid (не root)"; else bad "контейнер работает от root"; fi
+if [ -n "$uid" ] && [ "$uid" != "0" ]; then
+  ok "запуск от uid=$uid (не root)"
+elif [ "$uid" = "0" ]; then
+  bad "контейнер работает от root"
+else
+  bad "не удалось определить uid (контейнер не запустился)"
+fi
 CR=$(printf '\r')
 if docker run --rm --network none --entrypoint /bin/sh "$IMAGE" -c "grep -q '$CR' /entrypoint.sh"; then
   bad "в образе /entrypoint.sh содержит CRLF"
@@ -92,10 +105,11 @@ echo "== 5/6 Повтор ping x5: стабильность ответа =="
 prev=""; stable=1
 for _ in 1 2 3 4 5; do
   cur="$(docker run --rm --network none --entrypoint /entrypoint.sh "$IMAGE" ping 2>/dev/null)"
+  [ -n "$cur" ] || stable=0
   [ -z "$prev" ] && prev="$cur"
   [ "$cur" = "$prev" ] || stable=0
 done
-if [ "$stable" = 1 ]; then ok "ответ стабилен"; else bad "ответы различаются между запусками"; fi
+if [ "$stable" = 1 ]; then ok "ответ стабилен"; else bad "ответы различаются между запусками (или пустые)"; fi
 
 echo "== 6/6 Незаявленные задания завершаются с ошибкой в stderr =="
 declared="$(cat "$TMP/out.txt")"
@@ -105,7 +119,10 @@ for task in T2 T3 T4 T5; do
   esac
   docker run --rm --network none --entrypoint /entrypoint.sh "$IMAGE" "$task" >"$TMP/o" 2>"$TMP/e"
   code=$?
-  if [ "$code" -ne 0 ] && [ ! -s "$TMP/o" ] && [ -s "$TMP/e" ]; then
+  if grep -q 'docker: Error' "$TMP/e" 2>/dev/null || [ "$code" -ge 125 ]; then
+    bad "$task -> ошибка запуска контейнера (код $code), а не отказ решения"
+    head -3 "$TMP/e" | sed 's/^/           /'
+  elif [ "$code" -ne 0 ] && [ ! -s "$TMP/o" ] && [ -s "$TMP/e" ]; then
     ok "$task -> код $code, stdout пуст, диагностика в stderr"
   else
     bad "$task -> код $code; ожидался ненулевой код при пустом stdout"

@@ -69,6 +69,15 @@ docker pull --platform linux/amd64 "$FINAL_IMAGE"
 собранным образом: перед сборкой `git status --short` должен быть пуст, а
 `git rev-parse HEAD` — совпадать с указанным в кабинете.
 
+## Запуск из Windows-оболочек (MSYS2 / Git Bash / UCRT64)
+
+`docker run --entrypoint /entrypoint.sh …` в MSYS2 и Git Bash ломается: оболочка
+переводит аргумент `/entrypoint.sh` в виндовый путь, и Docker отвечает
+`exec: "E:/Git/entrypoint.sh": no such file or directory`. `verify.sh` и
+`publish.sh` сами выключают это поведение (`MSYS_NO_PATHCONV=1`,
+`MSYS2_ARG_CONV_EXCL='*'`, `MSYS2_ENV_CONV_EXCL='*'`). При ручных командах
+добавляйте те же переменные или запускайте Docker из PowerShell/cmd.
+
 ## Частые причины провала
 
 - `/entrypoint.sh` не исполняем или лежит не в корне — Judge запускает контейнер с

@@ -8,6 +8,12 @@
 # в скрипт не передаётся), чистый git status.
 set -uo pipefail
 
+# MSYS2/Git Bash превращают аргументы вида /entrypoint.sh в виндовые пути —
+# docker run тогда падает с "exec: E:/...: no such file or directory".
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+export MSYS2_ENV_CONV_EXCL='*'
+
 TEAM="${1:-}"
 DRY="${2:-}"
 if [ -z "$TEAM" ]; then
