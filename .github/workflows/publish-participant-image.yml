@@ -28,7 +28,7 @@ jobs:
   publish:
     runs-on: ubuntu-24.04
     env:
-      IMAGE: registry.cookcloud.ru/go1-hackathon-remote-stage-${{ inputs.team_name }}/${{ inputs.team_name }}:${{ inputs.tag }}
+      IMAGE: registry.cookcloud.ru/go1-hackathon-remote-stage/${{ inputs.team_name }}:${{ inputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
