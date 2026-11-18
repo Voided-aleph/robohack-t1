@@ -21,11 +21,11 @@ if [ -z "$TEAM" ]; then
   exit 2
 fi
 
-# Проект в Harbor — go1-hackathon-remote-stage, а имя команды идёт как репозиторий:
-#   registry.cookcloud.ru/go1-hackathon-remote-stage/<team>:latest
-# (в инструкции орга имя команды дублировалось, но в Harbor дублирования нет).
-IMAGE="registry.cookcloud.ru/go1-hackathon-remote-stage/${TEAM}:latest"
-REPO="registry.cookcloud.ru/go1-hackathon-remote-stage/${TEAM}"
+# Схема пути из инструкции орга (обновлена 18.11): проект = имя команды,
+# репозиторий = тоже имя команды:
+#   registry.cookcloud.ru/<team>/<team>:latest
+IMAGE="registry.cookcloud.ru/${TEAM}/${TEAM}:latest"
+REPO="registry.cookcloud.ru/${TEAM}/${TEAM}"
 
 cd "$(dirname "$0")"
 

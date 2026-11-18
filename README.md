@@ -123,7 +123,7 @@ bash publish.sh burmalda
 Ручной вариант:
 
 ```bash
-IMAGE="registry.cookcloud.ru/go1-hackathon-remote-stage/<team>:latest"
+IMAGE="registry.cookcloud.ru/<team>/<team>:latest"
 docker buildx build --platform linux/amd64 --provenance=false -t "$IMAGE" --push .
 docker buildx imagetools inspect "$IMAGE"                  # Digest: sha256:...
 docker pull --platform linux/amd64 "${IMAGE%:*}@sha256:..."
@@ -137,7 +137,7 @@ docker pull --platform linux/amd64 "${IMAGE%:*}@sha256:..."
 | Поле | Значение |
 |---|---|
 | GitHub (конкретный коммит) | `https://github.com/<user>/<repo>/commit/<40-символьный SHA>` |
-| Команда загрузки образа | `docker pull --platform linux/amd64 registry.cookcloud.ru/go1-hackathon-remote-stage/<team>@sha256:<digest>` |
+| Команда загрузки образа | `docker pull --platform linux/amd64 registry.cookcloud.ru/<team>/<team>@sha256:<digest>` |
 
 Ссылка на ветку не принимается: она изменяема. Публикует только капитан команды, на этап
 даётся 3 публикации. Окно исправлений — 24 ч, но не позже жёсткого дедлайна.
