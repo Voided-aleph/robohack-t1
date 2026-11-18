@@ -12,6 +12,8 @@ set -uo pipefail
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL='*'
 export MSYS2_ENV_CONV_EXCL='*'
+# Без подсказок Docker CLI («What's next: … Gordon») в выводе проверок.
+export DOCKER_CLI_HINTS=false
 
 cd "$(dirname "$0")"
 IMAGE="${IMAGE:-go1-participant:verify}"
@@ -76,11 +78,15 @@ else
   bad "не удалось определить uid (контейнер не запустился)"
 fi
 CR=$(printf '\r')
-if docker run --rm --network none --entrypoint /bin/sh "$IMAGE" -c "grep -q '$CR' /entrypoint.sh"; then
-  bad "в образе /entrypoint.sh содержит CRLF"
-else
-  ok "в образе /entrypoint.sh без CRLF"
-fi
+# Вердикт считается внутри контейнера и всегда завершается кодом 0: иначе Docker
+# CLI считает ожидаемый код 1 «ошибкой» и печатает свою подсказку в stderr.
+crlf="$(docker run --rm --network none --entrypoint /bin/sh "$IMAGE" \
+  -c "if grep -q '$CR' /entrypoint.sh; then echo CRLF; else echo LF; fi" 2>/dev/null)"
+case "$crlf" in
+  LF)   ok "в образе /entrypoint.sh без CRLF";;
+  CRLF) bad "в образе /entrypoint.sh содержит CRLF";;
+  *)    bad "не удалось проверить /entrypoint.sh (контейнер не запустился)";;
+esac
 
 echo "== 4/6 ping: код возврата, JSON, время (сеть отключена) =="
 start=$(date +%s%N)
