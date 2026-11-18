@@ -1,0 +1,88 @@
+name: publish-participant-image
+
+# Сборка и публикация образа участника в Registry организаторов (CookCloud/Harbor)
+# без локального Docker: раннеры GitHub — linux/amd64, buildx собирает сразу под
+# нужную платформу и печатает готовую команду docker pull с digest.
+#
+# Требуются секреты репозитория (Settings → Secrets and variables → Actions):
+#   HARBOR_USERNAME  — логин Harbor от организаторов
+#   HARBOR_PASSWORD  — пароль Harbor от организаторов
+
+on:
+  workflow_dispatch:
+    inputs:
+      team_name:
+        description: "Имя команды в Harbor (латиницей, как выдано организаторами)"
+        required: true
+        type: string
+      tag:
+        description: "Тег (не используется для сдачи, digest важнее)"
+        required: false
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    env:
+      IMAGE: registry.cookcloud.ru/go1-hackathon-remote-stage-${{ inputs.team_name }}/${{ inputs.team_name }}:${{ inputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to registry.cookcloud.ru
+        uses: docker/login-action@v3
+        with:
+          registry: registry.cookcloud.ru
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Build and push linux/amd64
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}
+
+      - name: Check published platform and fix digest
+        run: |
+          docker buildx imagetools inspect "$IMAGE" | tee inspect.txt
+          grep -qiE 'platform: *linux/amd64' inspect.txt \
+            || { echo "ОШИБКА: в опубликованном манифесте нет linux/amd64"; exit 1; }
+          echo "REF=${IMAGE%:*}@${{ steps.build.outputs.digest }}" >> "$GITHUB_ENV"
+
+      - name: Pull published image by digest and run ping offline
+        run: |
+          docker pull --platform linux/amd64 "$REF"
+          start=$(date +%s%N)
+          docker run --rm --network none --entrypoint /entrypoint.sh "$REF" ping > ping.out 2> ping.err
+          end=$(date +%s%N)
+          echo "ping занял $(( (end-start)/1000000 )) мс"
+          cat ping.out
+          python3 tools/check_ping.py ping.out 0
+
+      - name: Print submission fields
+        run: |
+          {
+            echo "### Образ опубликован"
+            echo ""
+            echo "**Digest:** \`${REF##*@}\`"
+            echo ""
+            echo "**Команда загрузки для личного кабинета:**"
+            echo '```'
+            echo "docker pull --platform linux/amd64 $REF"
+            echo '```'
+            echo ""
+            echo "**Коммит для личного кабинета:**"
+            echo '```'
+            echo "https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

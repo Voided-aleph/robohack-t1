@@ -1,0 +1,6 @@
+tools/
+verify.sh
+.git
+.gitattributes
+README.md
+*.md
