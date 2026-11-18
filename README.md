@@ -1,131 +1,193 @@
-# ROBOHACK 2.0 / Hackathon Go1 — сдача задания T1
+# Hackathon Go1 / ROBOHACK 2.0 — задание T1
 
-Скаффолд для автоматической проверки T1: Docker-образ `linux/amd64` на Ubuntu 22.04
-с исполняемым `/entrypoint.sh`, поддерживающим `ping`, работу без сети, без GPU и без root.
+Решение задания **T1 «Подготовка сдачи решения»**: самодостаточный Docker-образ, который
+организаторы запускают на своей инфраструктуре командой `/entrypoint.sh ping` и получают
+JSON со сведениями о решении.
 
-## Что внутри
+T1 — не задача про робота, а контракт запуска и гейт: без него остальные задания не
+оцениваются. Проверяется по трём критериям (по 1 баллу):
+
+| Критерий | Что требуется |
+|---|---|
+| Доступность образа | образ `linux/amd64` скачивается по `sha256` digest |
+| `/entrypoint.sh ping` | ≤ 10 с, код возврата 0, в stdout ровно один корректный JSON |
+| Автономность | работа без интернета, без доустановки зависимостей, без прав root |
+
+## Соответствие требованиям ТЗ 3.1
+
+| Требование | Как выполнено |
+|---|---|
+| Архитектура `linux/amd64` | сборка `docker buildx build --platform linux/amd64` |
+| Ubuntu 22.04 LTS (Jammy) | база `ros:humble-ros-base` — это Ubuntu 22.04 |
+| ROS 2 Humble Hawksbill | `ros:humble-ros-base` (ROS 2 Humble + colcon/rosdep) |
+| Eclipse Cyclone DDS, `rmw_cyclonedds_cpp` | пакет `ros-humble-rmw-cyclonedds-cpp` |
+| Только CPU, без GPU | нет CUDA/OpenGL-зависимостей |
+| Запуск без прав root | `USER participant` (uid 10001) |
+| Интернет недоступен во время испытаний | всё запечено в слои; рантайм ничего не тянет |
+| Исполняемый `/entrypoint.sh` | `COPY entrypoint.sh /entrypoint.sh` + `chmod 0755` |
+
+## Состав репозитория
 
 | Файл | Назначение |
 |---|---|
-| `Dockerfile` | Образ: ubuntu:22.04, непривилегированный пользователь uid 10001, `/entrypoint.sh` |
-| `entrypoint.sh` | Контракт запуска: `ping` → один JSON в stdout + exit 0; `T2..T5` → отказ, пока не реализованы |
-| `verify.sh` | Локальная имитация проверки организаторов (6 проверок) |
-| `tools/check_ping.py` | Строгий валидатор ответа `ping` по п. 3.3 ТЗ |
-| `.gitattributes` | Гарантирует LF в `.sh` (иначе в образе будет `\r: not found`) |
+| `Dockerfile` | образ: ROS 2 Humble на Ubuntu 22.04, RMW Cyclone DDS, uid 10001, `/entrypoint.sh` |
+| `entrypoint.sh` | контракт запуска: `ping` → один JSON в stdout + `exit 0`; `T2…T5` → честный отказ |
+| `verify.sh` | локальная имитация проверки организаторов, блоки 0–6 |
+| `tools/check_ping.py` | строгий валидатор ответа `ping` по п. 3.3 ТЗ |
+| `publish.sh` | сборка → push → digest → `docker pull` по digest → `ping` |
+| `.gitattributes` | `*.sh text eol=lf` — иначе на Windows в образ попадёт CRLF |
+| `.dockerignore` | не пускает в контекст сборки `tools/`, обвязку скриптов и `.git` |
+| `.github/workflows/publish-participant-image.yml` | резервная публикация через GitHub Actions (без локального Docker) |
 
-## 1. Правки перед сборкой
-
-Всё, что нужно менять, — блок констант в начале `entrypoint.sh`:
-
-```bash
-SUPPORTED_TASKS_JSON='[]'      # реально реализованные задания: '["T2"]', '["T2","T3"]' ...
-SELF_TRAINED_RL="false"        # true только при самостоятельном обучении/дообучении RL-политики
-PREFERRED_SPEED_MPS="null"     # м/с для T3, null если T3 не реализовано
-```
-
-Декларировать нужно только то, что действительно работает: заявленное, но не
-запускающееся задание проверяется вызовом `/entrypoint.sh T2|T3|T4|T5`.
-
-## 2. Локальная проверка
+## Быстрый старт
 
 ```bash
-bash verify.sh
+docker login registry.cookcloud.ru      # учётка от организаторов
+bash verify.sh                          # блоки локальных проверок 0–6
+bash publish.sh <team>                  # сборка + публикация + digest
 ```
 
-Проверяются: сборка под `linux/amd64`, платформа образа, исполняемость и права
-на `/entrypoint.sh`, корректность и время `ping` без сети, стабильность ответа,
-ненулевой код возврата для незаявленных заданий.
+`publish.sh` в конце печатает готовые поля для личного кабинета.
 
-## 3. Публикация образа
+## Контракт `ping` (п. 3.3 ТЗ)
 
-Нужны Docker Engine, Buildx и учётная запись Harbor от организаторов.
+```json
+{"protocol_version":"1.0","supported_tasks":[],"self_trained_rl":false,"preferred_speed_mps":null}
+```
+
+| Поле | Тип | Значение |
+|---|---|---|
+| `protocol_version` | string | ровно `"1.0"` |
+| `supported_tasks` | array[string] | только реально работающие задания: `T2`, `T3`, `T4`, `T5` (латинская `T`) |
+| `self_trained_rl` | boolean | `true` только при самостоятельном обучении/дообучении RL-политики |
+| `preferred_speed_mps` | number \| null | скорость для T3 в м/с; `null`, если T3 не реализовано |
+
+Правила, которые легко нарушить: код возврата `0`, не более 10 с реального времени,
+в stdout **ровно один** JSON-объект (пробельные символы допустимы), диагностика — только
+в stderr.
+
+## Что менять перед сборкой
+
+Всё настраивается блоком констант в начале `entrypoint.sh`:
 
 ```bash
-docker login registry.cookcloud.ru
-
-read -r -p "Имя команды в Harbor: " TEAM_NAME
-IMAGE="registry.cookcloud.ru/go1-hackathon-remote-stage-${TEAM_NAME}/${TEAM_NAME}:latest"
-
-docker buildx build --platform linux/amd64 -t "$IMAGE" --push .
-docker buildx imagetools inspect "$IMAGE"        # взять строку Digest: sha256:...
+SUPPORTED_TASKS_JSON='[]'      # '["T2"]', '["T2","T3"]' — только работающее
+SELF_TRAINED_RL="false"        # true только при собственной обученной политике
+PREFERRED_SPEED_MPS="null"     # число м/с для T3, иначе null
 ```
 
-Проверка, что образ реально скачивается по digest:
+Заявленное задание проверяется вызовом `/entrypoint.sh T2|T3|T4|T5`, поэтому декларировать
+нужно только то, что действительно запускается.
+
+## Проверка
 
 ```bash
-read -r -p "Digest (sha256:...): " DIGEST
-FINAL_IMAGE="${IMAGE%:*}@${DIGEST}"
-docker pull --platform linux/amd64 "$FINAL_IMAGE"
+bash verify.sh                            # собрать и проверить
+IMAGE=... IMAGE_READY=1 bash verify.sh    # проверить уже собранный образ
 ```
 
-## 4. Что указать в личном кабинете
+| Блок | Что проверяется |
+|---|---|
+| 0 | LF в `entrypoint.sh`, наличие `.gitattributes` с `eol=lf` |
+| 1 | сборка под `linux/amd64` |
+| 2 | платформа образа, `PRETTY_NAME` = Ubuntu 22.04 |
+| 3 | `/entrypoint.sh` исполняем, uid ≠ 0, внутри образа файл без CRLF |
+| 4 | `ping` без сети: код 0, JSON по схеме, время < 10 с |
+| 5 | пять запусков `ping` дают одинаковый непустой ответ |
+| 6 | незаявленные `T2…T5` завершаются ненулевым кодом, stdout пуст, причина в stderr |
+
+Блок 6 отличает отказ решения от ошибки запуска контейнера: код ≥ 125 или `docker: Error`
+в stderr считаются провалом, а не «честным отказом».
+
+Ручные проверки:
+
+```bash
+docker run --rm --network none --entrypoint /entrypoint.sh go1-participant:verify ping
+docker image inspect --format '{{.Os}}/{{.Architecture}}' go1-participant:verify
+docker run --rm --network none --entrypoint /bin/sh go1-participant:verify -c 'id -u'
+```
+
+## Публикация
+
+`publish.sh` делает всё по порядку и отказывается работать, если `git status` грязный
+(иначе исходники коммита разойдутся с образом):
+
+```bash
+bash publish.sh burmalda
+```
+
+Что он выполняет: проверка git → `buildx build --platform linux/amd64 --provenance=false
+--push` → проверка `platform: linux/amd64` в опубликованном манифесте → получение digest →
+`docker pull` по digest → `ping` из скачанного образа.
+
+Ручной вариант:
+
+```bash
+IMAGE="registry.cookcloud.ru/go1-hackathon-remote-stage-<team>/<team>:latest"
+docker buildx build --platform linux/amd64 --provenance=false -t "$IMAGE" --push .
+docker buildx imagetools inspect "$IMAGE"                  # Digest: sha256:...
+docker pull --platform linux/amd64 "${IMAGE%:*}@sha256:..."
+```
+
+`--provenance=false` убирает attestation-манифест: без него digest указывает на index с
+двумя записями, а не на сам образ.
+
+## Что указать в личном кабинете
 
 | Поле | Значение |
 |---|---|
 | GitHub (конкретный коммит) | `https://github.com/<user>/<repo>/commit/<40-символьный SHA>` |
 | Команда загрузки образа | `docker pull --platform linux/amd64 registry.cookcloud.ru/go1-hackathon-remote-stage-<team>/<team>@sha256:<digest>` |
 
-Ссылка на ветку `main` не принимается. Исходники коммита должны совпадать с
-собранным образом: перед сборкой `git status --short` должен быть пуст, а
-`git rev-parse HEAD` — совпадать с указанным в кабинете.
+Ссылка на ветку не принимается: она изменяема. Публикует только капитан команды, на этап
+даётся 3 публикации. Окно исправлений — 24 ч, но не позже жёсткого дедлайна.
 
 ## Запуск из Windows-оболочек (MSYS2 / Git Bash / UCRT64)
 
-`docker run --entrypoint /entrypoint.sh …` в MSYS2 и Git Bash ломается: оболочка
-переводит аргумент `/entrypoint.sh` в виндовый путь, и Docker отвечает
-`exec: "E:/Git/entrypoint.sh": no such file or directory`. `verify.sh` и
-`publish.sh` сами выключают это поведение (`MSYS_NO_PATHCONV=1`,
-`MSYS2_ARG_CONV_EXCL='*'`, `MSYS2_ENV_CONV_EXCL='*'`). При ручных командах
-добавляйте те же переменные или запускайте Docker из PowerShell/cmd.
+MSYS2 и Git Bash переводят аргументы, начинающиеся с `/`, в виндовые пути, и
+`docker run --entrypoint /entrypoint.sh` падает с
+`exec: "E:/Git/entrypoint.sh": no such file or directory`. `verify.sh` и `publish.sh`
+отключают это сами:
+
+```bash
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' MSYS2_ENV_CONV_EXCL='*'
+```
+
+При ручных командах добавляйте эти переменные или работайте из PowerShell/cmd.
+
+## Ключевые решения и их причины
+
+| Решение | Причина |
+|---|---|
+| JSON печатается `printf`, без python/jq | нет зависимостей — нечему упасть без сети |
+| константы вынесены в начало скрипта | единственное место правки, остальное — шаблон |
+| отказ для `T2…T5` с кодом 64 | `EX_USAGE`: stdout пуст, причина в stderr — отказ виден и диагностируем |
+| `set +u` вокруг `source setup.bash` | ROS 2 `setup.bash` несовместим с `nounset` и падает на `AMENT_TRACE_SETUP_FILES` |
+| `USER participant` (uid 10001) | требование «без прав root» |
+| конфиг DDS в образе не прописывается | `ROS_DOMAIN_ID`, `RMW_IMPLEMENTATION`, `CYCLONEDDS_URI` передаёт лаунчер организаторов |
+| `.gitattributes` с `eol=lf` | иначе правка на Windows приносит CRLF в исполняемый скрипт |
+| `--provenance=false` | digest должен указывать на образ, а не на index с attestation-манифестом |
 
 ## Частые причины провала
 
-- `/entrypoint.sh` не исполняем или лежит не в корне — Judge запускает контейнер с
-  `--entrypoint /entrypoint.sh`, ENTRYPOINT из Dockerfile игнорируется.
-- CRLF в `entrypoint.sh` (правка файла на Windows без `.gitattributes`).
-- В stdout при `ping` попадает баннер, `apt`-вывод, `ROS`-логи — допустим только
-  JSON; диагностика только в stderr.
-- Запуск от root (`USER` не переключён) или образ собран под `linux/arm64`.
-- Образ тянет пакеты из сети при старте (`pip install`, `apt-get update` в entrypoint).
-- `preferred_speed_mps` строкой (`"0.3"`) вместо числа, или непустой при `T3` вне списка.
+| Симптом | Причина |
+|---|---|
+| `\r: not found` при старте | CRLF в `/entrypoint.sh` |
+| `/entrypoint.sh` не найден | файл не в корне или не исполняем: Judge задаёт `--entrypoint /entrypoint.sh` и игнорирует `ENTRYPOINT` из Dockerfile |
+| В stdout баннер, лог ROS или вывод `apt` | посторонний текст ломает JSON-парсер |
+| `platform = linux/arm64` | образ собран без `--platform linux/amd64` |
+| Работает от root | не переключён `USER` |
+| Тянет пакеты при старте | `pip install` / `apt-get update` в `entrypoint.sh` — без сети это провал |
+| `preferred_speed_mps` строкой | требуется число (`0.3`), не `"0.3"` |
+| `manifest unknown` при `pull` | digest скопирован не целиком |
+| Ссылка на коммит 404 | репозиторий приватный или удалён после публикации |
 
-## 5. Где собирать образ
+## Состояние текущей редакции
 
-**Путь А — Docker Desktop на этой машине.** Нужны WSL 2 и перезагрузка: Docker Desktop
-затем `docker login registry.cookcloud.ru`, дальше раздел 3. Сборка под amd64 на
-Windows x86 идёт нативно, эмуляция не нужна.
-
-**Путь Б — GitHub Actions, Docker локально не нужен.** В репозитории лежит
-`.github/workflows/publish-participant-image.yml`: он собирает образ под `linux/amd64`,
-пушит в `registry.cookcloud.ru`, проверяет платформу в манифесте, скачивает образ
-обратно по digest и прогоняет `ping` без сети, а в Summary печатает готовые поля для
-кабинета (digest, команду `docker pull`, ссылку на коммит).
-
-Подготовка один раз:
-
-```bash
-git init && git add -A && git commit -m "T1: participant image"
-git branch -M main
-git remote add origin https://github.com/<user>/<repo>.git   # репозиторий ПУБЛИЧНЫЙ
-git push -u origin main
-```
-
-Затем в GitHub: Settings → Secrets and variables → Actions добавить `HARBOR_USERNAME`
-и `HARBOR_PASSWORD`, открыть вкладку Actions → `publish-participant-image` → Run
-workflow, указать имя команды в Harbor. После прогона взять digest и команду из Summary.
-
-## 6. Чек-лист перед отправкой в кабинет
-
-| # | Проверка | Как убедиться |
-|---|---|---|
-| 1 | `/entrypoint.sh ping` даёт ровно один JSON, `exit 0`, < 10 с | `verify.sh`, шаги 4–5 |
-| 2 | stdout чистый: ни баннеров, ни логов | `docker run ... ping` — глазами |
-| 3 | Образ `linux/amd64` | `docker image inspect --format '{{.Os}}/{{.Architecture}}'` |
-| 4 | Запуск не от root | `docker run --entrypoint id <img>` → uid 10001 |
-| 5 | Работает без сети | шаг 4 `verify.sh` (`--network none`) |
-| 6 | Образ тянется по digest у орга | `docker pull --platform linux/amd64 <repo>@sha256:...` на чистой машине |
-| 7 | Ссылка на коммит открывается в браузере (инкогнито) | репозиторий публичный |
-| 8 | Исходники коммита = собранный образ | `git status --short` пуст перед сборкой |
-| 9 | Кабинет заполняет капитан | в ЛК «Публикаций команды: 0 из 3» |
-
-Отправлять заранее: окно исправлений 24 ч, но не позже дедлайна 19 ноя 12:00 МСК.
+- Реализовано только **T1**: `supported_tasks: []`, `self_trained_rl: false`,
+  `preferred_speed_mps: null`. T2–T5 не реализованы и потому не заявлены.
+- Образ: Ubuntu 22.04.5 LTS + ROS 2 Humble + `rmw_cyclonedds_cpp`, 1.15 ГБ.
+- `bash verify.sh` — провалов 0.
+- Замер `ping` на Windows/WSL 2: 4.7–5.6 с, из них ~5 с — накладные расходы
+  `docker run` (пустой `/bin/true` в том же образе даёт столько же), сам скрипт
+  отрабатывает мгновенно.
