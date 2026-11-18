@@ -4,3 +4,4 @@ verify.sh
 .gitattributes
 README.md
 *.md
+publish.sh
