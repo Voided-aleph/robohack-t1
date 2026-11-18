@@ -75,9 +75,29 @@ docker pull --platform linux/amd64 "$REF" || { echo "ОШИБКА: образ н
 
 echo
 echo "== ping из скачанного по digest образа (без сети) =="
-docker run --rm --network none --entrypoint /entrypoint.sh "$REF" ping > /tmp/go1_ping.txt 2>/dev/null
-python3 tools/check_ping.py "$(cygpath -w /tmp/go1_ping.txt 2>/dev/null || echo /tmp/go1_ping.txt)" 0 || \
-  echo "ВНИМАНИЕ: проверка ping не прошла" >&2
+if docker run --rm --network none --entrypoint /entrypoint.sh "$REF" ping > /tmp/go1_ping.txt 2>/dev/null; then
+  PING_OUT="$(cat /tmp/go1_ping.txt)"
+  printf '%s\n' "$PING_OUT"
+  # Проверка без внешних зависимостей: все четыре поля на месте и exit 0.
+  missing=""
+  for field in protocol_version supported_tasks self_trained_rl preferred_speed_mps; do
+    printf '%s' "$PING_OUT" | grep -q "\"$field\"" || missing="$missing $field"
+  done
+  if [ -z "$missing" ] && printf '%s' "$PING_OUT" | grep -q '"protocol_version":"1.0"'; then
+    echo "  [ OK ] протокол ping корректен"
+  else
+    echo "ВНИМАНИЕ: в ответе ping не хватает полей:$missing" >&2
+  fi
+else
+  echo "ВНИМАНИЕ: ping из скачанного образа не выполнился" >&2
+fi
+
+ORIGIN="$(git remote get-url origin 2>/dev/null | sed -e 's|\.git$||' -e 's|^git@github.com:|https://github.com/|')"
+if [ -n "$ORIGIN" ]; then
+  COMMIT_URL="${ORIGIN}/commit/$(git rev-parse HEAD)"
+else
+  COMMIT_URL="https://github.com/<user>/<repo>/commit/$(git rev-parse HEAD)"
+fi
 
 cat <<EOF
 
@@ -85,7 +105,7 @@ cat <<EOF
 Поля для личного кабинета
 ----------------------------------------------------------------
 GitHub (конкретный коммит):
-https://github.com/<user>/<repo>/commit/$(git rev-parse HEAD)
+${COMMIT_URL}
 
 Команда загрузки образа:
 docker pull --platform linux/amd64 ${REF}
