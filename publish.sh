@@ -66,8 +66,12 @@ if [ -z "$DIGEST" ]; then
   echo "ОШИБКА: не удалось получить digest из манифеста" >&2
   exit 5
 fi
-if ! printf '%s' "$MANIFEST_OUT" | grep -qiE 'platform: *linux/amd64'; then
-  echo "ОШИБКА: в опубликованном манифесте нет linux/amd64" >&2
+# Платформу берём из самого образа: при --provenance=false в Registry лежит
+# одиночный манифест, и строки "Platform:" в его выводе нет — она есть только
+# у index'а из нескольких манифестов.
+META_PLATFORM="$(printf '%s' "$MANIFEST_OUT" | grep -ioE 'platform: *linux/amd64' | head -1)"
+if ! printf '%s' "$MANIFEST_OUT" | grep -qiE 'linux/amd64|oci.image.manifest|docker.distribution.manifest.v2'; then
+  echo "ОШИБКА: манифест не похож на образ для linux/amd64" >&2
   exit 6
 fi
 
@@ -75,6 +79,13 @@ REF="${REPO}@${DIGEST}"
 echo
 echo "== Проверка загрузки по digest =="
 docker pull --platform linux/amd64 "$REF" || { echo "ОШИБКА: образ не тянется по digest" >&2; exit 7; }
+PLATFORM="$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$REF" 2>/dev/null)"
+if [ "$PLATFORM" = "linux/amd64" ]; then
+  echo "  [ OK ] платформа скачанного образа: $PLATFORM"
+else
+  echo "ОШИБКА: платформа скачанного образа '$PLATFORM', требуется linux/amd64" >&2
+  exit 8
+fi
 
 echo
 echo "== ping из скачанного по digest образа (без сети) =="
